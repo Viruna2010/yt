@@ -3,7 +3,7 @@ name: Viru Radio YT Stream (Browser Capture)
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *' # පැය 5න් 5ට auto restart වෙනවා
+    - cron: '0 */5 * * *' # Paya 5n 5ta auto restart wenawa
 
 jobs:
   stream:
@@ -23,14 +23,14 @@ jobs:
       - name: Install Puppeteer
         run: npm install puppeteer
 
-      - name: Create Auto-Clicker Script
+      - name: Create Auto-Clicker Script (Whole Page)
         run: |
           cat << 'EOF' > stream.js
           const puppeteer = require('puppeteer');
           
           (async () => {
             const browser = await puppeteer.launch({
-              headless: false, // Screen එක record කරන්න ඕන නිසා false කරනවා
+              headless: false,
               defaultViewport: { width: 1280, height: 720 },
               args: [
                 '--no-sandbox',
@@ -45,20 +45,38 @@ jobs:
             console.log("Loading website...");
             await page.goto('https://viru-radio.pages.dev/', { waitUntil: 'networkidle2' });
             
-            console.log("Waiting 5 seconds for page load...");
-            await new Promise(r => setTimeout(r, 5000));
+            // Radio eka load wenakam titha 5-10k innawa
+            console.log("Waiting 10 seconds for initial connection...");
+            await new Promise(r => setTimeout(r, 10000));
             
-            console.log("Clicking the 'Listen Live' button...");
+            console.log("Clicking *everywhere* on the page...");
+            
+            // Whole page area (1280x720) clicks yawanna:
             await page.evaluate(() => {
-              // 'Listen Live' කියලා තියෙන button එක හොයලා click කරනවා
-              const elements = [...document.querySelectorAll('button, div, span')];
-              const btn = elements.find(el => el.innerText && el.innerText.includes('Listen Live'));
-              if (btn) {
-                btn.click();
+              const width = 1280;
+              const height = 720;
+              const stepX = 50; // Every 50 pixels horizontally
+              const stepY = 50; // Every 50 pixels vertically
+              
+              for (let x = 0; x < width; x += stepX) {
+                for (let y = 0; y < height; y += stepY) {
+                  // Coordinate ekak generate karala math click yawanna
+                  const clickX = x + Math.random() * 20; // Random offset for variation
+                  const clickY = y + Math.random() * 20;
+                  
+                  // Meke simulate karanna custom function ekak liwwa
+                  window.dispatchEvent(new MouseEvent('click', {
+                    view: window,
+                    bubbles: true,
+                    cancelable: true,
+                    clientX: clickX,
+                    clientY: clickY
+                  }));
+                }
               }
             });
             
-            console.log("Radio is playing. Keeping browser open...");
+            console.log("Radio playing. Keeping browser open...");
           })();
           EOF
 
@@ -66,22 +84,22 @@ jobs:
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
-          # Virtual Audio System එක on කිරීම
+          # Virtual Audio System ekon kirima
           pulseaudio -D --exit-idle-time=-1
           pacmd load-module module-virtual-sink sink_name=v1
           
-          # Virtual Display එක on කිරීම
+          # Virtual Display ekon kirima
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x720x24 &
           sleep 3
 
-          # Node script එක run කරලා website එක open කිරීම
+          # Node script eka run karala website eka open kirima
           node stream.js &
           
-          # Radio එක load වෙන්න තත්පර 10ක් දීලා stream එක පටන් ගන්නවා
-          sleep 10 
+          # Whole page click wenakota stream eka patan ganna
+          sleep 5 
 
-          # Screen එකයි Audio එකයි record කරලා YouTube යැවීම
+          # Screen ekai Audio ekai record karala YouTube yaweema
           ffmpeg -thread_queue_size 1024 -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
           -f pulse -i default \
           -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
