@@ -1,4 +1,4 @@
-name: Viru Radio 24/7 YT Stream (Red Button Clicker)
+name: Viru Radio 24/7 YT Stream (Fixed Audio)
 
 on:
   workflow_dispatch:
@@ -37,7 +37,8 @@ jobs:
                 '--disable-setuid-sandbox',
                 '--autoplay-policy=no-user-gesture-required',
                 '--window-size=1280,720',
-                '--start-maximized'
+                '--start-maximized',
+                '--disable-features=AudioServiceOutOfProcess' // PulseAudio හරහා Audio එක කෙලින්ම යවන්න
               ]
             });
             const page = await browser.newPage();
@@ -48,21 +49,19 @@ jobs:
             console.log("Waiting for 'Connecting to Server...' to finish...");
             
             try {
-              // රතු පාට Listen Live button එක එනකම් උපරිම තත්පර 60ක් බලාගෙන ඉන්නවා
+              // Listen Live button එක එනකම් බලාගෙන ඉන්නවා
               await page.waitForFunction(() => {
                 const elements = [...document.querySelectorAll('*')];
                 return elements.some(el => {
                   const textMatch = el.innerText && el.innerText.includes('Listen Live');
-                  // රතු පාට background එකක් තියෙනවද කියලා check කරනවා
                   const bg = window.getComputedStyle(el).backgroundColor;
                   const isRed = bg.includes('rgb(255,') || bg.includes('rgb(239,') || bg.includes('red');
                   return textMatch || isRed;
                 });
               }, { timeout: 60000 });
               
-              console.log("Red 'Listen Live' Button found! Locating exact position...");
+              console.log("Red Button found! Locating exact position...");
               
-              // හරියටම ඇතුලෙම තියෙන රතු පාට element එක හොයාගන්නවා (.reverse() පාවිච්චි කරලා)
               const buttonHandle = await page.evaluateHandle(() => {
                 const elements = [...document.querySelectorAll('*')];
                 return elements.reverse().find(el => {
@@ -76,25 +75,22 @@ jobs:
               const box = await buttonHandle.boundingBox();
               
               if (box) {
-                // Button එකේ හරි මැද point එක හොයාගන්නවා
                 const targetX = box.x + box.width / 2;
                 const targetY = box.y + box.height / 2;
                 
                 console.log(`Moving mouse to Red Button at X: ${targetX}, Y: ${targetY}`);
                 await page.mouse.move(targetX, targetY, { steps: 10 });
                 
-                // මනුස්සයෙක් click කරනවා වගේම Mouse එක ඔබලා, මිලි තත්පර 100ක් අල්ලන් ඉඳලා අතහරිනවා
                 await page.mouse.down();
-                await new Promise(r => setTimeout(r, 100)); 
+                await new Promise(r => setTimeout(r, 150)); 
                 await page.mouse.up();
                 console.log("Red Button Clicked successfully!");
                 
               } else {
-                console.log("Bounding box not found. Clicking via Javascript as fallback.");
                 await buttonHandle.evaluate(b => b.click());
               }
             } catch (err) {
-              console.log("Error: Red Button did not appear.", err);
+              console.log("Error during click process:", err);
             }
           })();
           EOF
@@ -103,24 +99,27 @@ jobs:
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
-          # Virtual Audio System එක on කිරීම
+          # PulseAudio System එක සෙට් කිරීම (Speakers Output එක Virtual Sink එකකට යවනවා)
           pulseaudio -D --exit-idle-time=-1
           pacmd load-module module-virtual-sink sink_name=v1
+          pacmd set-default-sink v1
+          pacmd set-default-source v1.monitor
           
-          # Virtual Display එක on කිරීම
+          # Virtual Display එක Start කිරීම
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x720x24 &
           sleep 3
 
-          # Node script එක run කිරීම
+          # Browser Script එක Run කිරීම
           node stream.js &
           
-          # Button එක click වෙලා Audio එක play වෙන්න තත්පර 15ක් දෙනවා (මෙතනින් තමයි stream එක පටන් ගන්න කලින් audio එක load වෙන්න වෙලාව හදලා තියෙන්නේ)
+          # Button එක Click වී Radio එක Play වෙනකම් තත්පර 15ක් ඉන්නවා
           sleep 15 
 
-          # Screen එකයි Audio එකයි record කරලා YouTube යැවීම
-          ffmpeg -thread_queue_size 1024 -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
-          -f pulse -i default \
+          # FFmpeg එකෙන් Screen එකයි Virtual Speaker Output (v1.monitor) එකයි Capture කරලා YouTube යැවීම
+          ffmpeg -thread_queue_size 1024 \
+          -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
+          -f pulse -i v1.monitor \
           -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
           -c:a aac -b:a 128k -ar 44100 \
           -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
