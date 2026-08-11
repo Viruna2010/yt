@@ -2,27 +2,53 @@ name: Viru Radio 24/7 YT Stream (Final Audio Fixed)
 
 on:
   workflow_dispatch:
+
   schedule:
     - cron: '0 */5 * * *' # පැය 5න් 5ට auto restart වෙනවා
 
 jobs:
   stream:
     runs-on: ubuntu-latest
-    
+
     steps:
+
+      # ============================================================
+      # 1. INSTALL SYSTEM DEPENDENCIES
+      # ============================================================
       - name: Install System Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y xvfb pulseaudio ffmpeg chromium-browser alsa-utils libasound2-plugins
+          sudo apt-get install -y \
+            xvfb \
+            pulseaudio \
+            pulseaudio-utils \
+            ffmpeg \
+            chromium-browser \
+            alsa-utils \
+            libasound2-plugins
 
+
+      # ============================================================
+      # 2. NODE.JS
+      # ============================================================
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install Puppeteer
-        run: npm install puppeteer
 
+      # ============================================================
+      # 3. PUPPETEER
+      # ============================================================
+      - name: Install Puppeteer
+        run: |
+          npm install puppeteer
+
+
+      # ============================================================
+      # 4. YOUR ORIGINAL BUTTON CLICK SCRIPT
+      #    NOTHING CHANGED HERE
+      # ============================================================
       - name: Create Smart Red Button Clicker Script (Untouched)
         run: |
           cat << 'EOF' > stream.js
@@ -84,43 +110,255 @@ jobs:
           })();
           EOF
 
+
+      # ============================================================
+      # 5. START PULSEAUDIO + BROWSER + FFMPEG
+      # ============================================================
       - name: Start Stream to YouTube
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+
         run: |
-          # 1. ALSA to PulseAudio bridge config එක හැදීම
-          echo -e "pcm.!default {\n    type pulse\n}\nctl.!default {\n    type pulse\n}" > ~/.asoundrc
-          
-          # 2. PulseAudio System එක Start කර sink/source setup කිරීම
+
+          set -e
+
+          echo "=========================================="
+          echo " VIRU RADIO STREAM STARTING"
+          echo "=========================================="
+
+
+          # ========================================================
+          # 1. ALSA -> PULSEAUDIO
+          # ========================================================
+
+          cat > ~/.asoundrc <<'EOF'
+          pcm.!default {
+              type pulse
+          }
+
+          ctl.!default {
+              type pulse
+          }
+          EOF
+
+          echo "ALSA -> PulseAudio bridge configured."
+
+
+          # ========================================================
+          # 2. START PULSEAUDIO
+          # ========================================================
+
           pulseaudio -D --exit-idle-time=-1
-          sleep 2
-          
-          pacmd load-module module-virtual-sink sink_name=v1
-          pacmd set-default-sink v1
-          pacmd set-default-source v1.monitor
-          
-          # 3. CRITICAL: Chromium audio output එක v1 sink එකටම force කිරීම
-          export PULSE_SINK=v1
-          
-          # 4. Virtual Display එක Start කිරීම
-          export DISPLAY=:99
-          Xvfb :99 -screen 0 1280x720x24 &
+
           sleep 3
 
-          # 5. Browser Script එක Run කර Button එක click කරවීම
-          node stream.js &
-          
-          # 6. Radio එක play වී audio load වීමට තත්පර 15ක් ඉඳීම
-          sleep 15 
+          echo "PulseAudio started."
 
-          # 7. Audio sinks connect වී ඇත්දැයි බැලීමට debug logs පෙන්වීම
-          echo "=== PulseAudio Sink Inputs ==="
+
+          # ========================================================
+          # 3. CREATE VIRTUAL AUDIO SINK
+          # ========================================================
+
+          pactl load-module module-null-sink \
+            sink_name=v1 \
+            sink_properties=device.description=ViruRadioSink
+
+          sleep 2
+
+
+          # ========================================================
+          # 4. MAKE v1 DEFAULT
+          # ========================================================
+
+          pactl set-default-sink v1
+          pactl set-default-source v1.monitor
+
+
+          # ========================================================
+          # 5. FORCE DEFAULT AUDIO ENVIRONMENT
+          # ========================================================
+
+          export PULSE_SINK=v1
+
+          echo "PULSE_SINK = $PULSE_SINK"
+
+
+          # ========================================================
+          # 6. SHOW AUDIO DEVICES
+          # ========================================================
+
+          echo ""
+          echo "========== PULSEAUDIO SINKS =========="
+
+          pactl list short sinks
+
+          echo ""
+          echo "========== PULSEAUDIO SOURCES =========="
+
+          pactl list short sources
+
+
+          # ========================================================
+          # 7. START Xvfb
+          # ========================================================
+
+          export DISPLAY=:99
+
+          Xvfb :99 \
+            -screen 0 1280x720x24 \
+            -ac \
+            +extension GLX \
+            +render \
+            -noreset &
+
+          sleep 3
+
+          echo "Xvfb started."
+
+
+          # ========================================================
+          # 8. START YOUR ORIGINAL BROWSER SCRIPT
+          # ========================================================
+
+          export PULSE_SINK=v1
+          export DISPLAY=:99
+
+          node stream.js > browser.log 2>&1 &
+
+          BROWSER_PID=$!
+
+          echo "Browser PID: $BROWSER_PID"
+
+
+          # ========================================================
+          # 9. WAIT FOR WEBSITE + BUTTON + RADIO
+          # ========================================================
+
+          echo ""
+          echo "Waiting for browser/radio..."
+
+          sleep 15
+
+
+          # ========================================================
+          # 10. SHOW BROWSER LOG
+          # ========================================================
+
+          echo ""
+          echo "========== BROWSER LOG =========="
+
+          cat browser.log || true
+
+
+          # ========================================================
+          # 11. CRITICAL AUDIO FIX
+          #
+          # Chromium may create its audio stream on another sink.
+          # Find every sink-input and move it to v1.
+          # ========================================================
+
+          echo ""
+          echo "========== MOVING CHROME AUDIO TO v1 =========="
+
+          for i in $(seq 1 30); do
+
+            echo "Audio routing attempt $i/30"
+
+            INPUTS=$(pactl list short sink-inputs | awk '{print $1}')
+
+            if [ -n "$INPUTS" ]; then
+
+              for INPUT in $INPUTS; do
+
+                echo "Moving sink-input $INPUT -> v1"
+
+                pactl move-sink-input "$INPUT" v1 || true
+
+              done
+
+              echo "Chrome audio input detected."
+
+            else
+
+              echo "No sink-input detected yet."
+
+            fi
+
+            sleep 1
+
+          done
+
+
+          # ========================================================
+          # 12. FINAL AUDIO CHECK
+          # ========================================================
+
+          echo ""
+          echo "========== FINAL SINK INPUTS =========="
+
           pactl list short sink-inputs || true
 
-          # 8. FFmpeg හරහා screen එකයි v1.monitor audio එකයි capture කර YouTube යැවීම
-          ffmpeg -thread_queue_size 1024 \
-          -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
-          -f pulse -i v1.monitor \
-          -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
-          -c:a aac -b:a 128k -ar 44100 \
-          -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
+
+          echo ""
+          echo "========== DEFAULT SINK =========="
+
+          pactl get-default-sink || true
+
+
+          echo ""
+          echo "========== DEFAULT SOURCE =========="
+
+          pactl get-default-source || true
+
+
+          # ========================================================
+          # 13. CHECK YOUTUBE KEY
+          # ========================================================
+
+          if [ -z "$YOUTUBE_STREAM_KEY" ]; then
+            echo "ERROR: YOUTUBE_STREAM_KEY is empty!"
+            exit 1
+          fi
+
+
+          # ========================================================
+          # 14. START FFMPEG
+          #
+          # VIDEO  -> Xvfb
+          # AUDIO  -> v1.monitor
+          # ========================================================
+
+          echo ""
+          echo "=========================================="
+          echo " STARTING FFMPEG"
+          echo " VIDEO : X11 :99"
+          echo " AUDIO : PulseAudio v1.monitor"
+          echo "=========================================="
+          echo ""
+
+          ffmpeg \
+            -hide_banner \
+            -loglevel info \
+            -thread_queue_size 2048 \
+            -f x11grab \
+            -video_size 1280x720 \
+            -framerate 30 \
+            -i :99 \
+            -thread_queue_size 2048 \
+            -f pulse \
+            -i v1.monitor \
+            -map 0:v:0 \
+            -map 1:a:0 \
+            -c:v libx264 \
+            -preset veryfast \
+            -b:v 2500k \
+            -maxrate 2500k \
+            -bufsize 5000k \
+            -pix_fmt yuv420p \
+            -g 60 \
+            -c:a aac \
+            -b:a 128k \
+            -ar 44100 \
+            -ac 2 \
+            -f flv \
+            "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
