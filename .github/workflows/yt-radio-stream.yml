@@ -1,4 +1,4 @@
-name: Viru Radio 24/7 YT Stream (Final Audio Fix)
+name: Viru Radio 24/7 YT Stream (Final Audio Fixed)
 
 on:
   workflow_dispatch:
@@ -10,10 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install System Dependencies (With Audio Bridge)
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
-          # මෙතන alsa-utils සහ libasound2-plugins දැම්මා අනිවාර්යයෙන් audio link වෙන්න
           sudo apt-get install -y xvfb pulseaudio ffmpeg chromium-browser alsa-utils libasound2-plugins
 
       - name: Setup Node.js
@@ -24,7 +23,7 @@ jobs:
       - name: Install Puppeteer
         run: npm install puppeteer
 
-      - name: Create Smart Red Button Clicker Script
+      - name: Create Smart Red Button Clicker Script (Untouched)
         run: |
           cat << 'EOF' > stream.js
           const puppeteer = require('puppeteer');
@@ -89,27 +88,36 @@ jobs:
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
-          # 1. ALSA to PulseAudio Bridge එක හදනවා (මේකෙන් තමයි Browser audio එක අල්ලන්නේ)
+          # 1. ALSA to PulseAudio bridge config එක හැදීම
           echo -e "pcm.!default {\n    type pulse\n}\nctl.!default {\n    type pulse\n}" > ~/.asoundrc
           
-          # 2. PulseAudio System එක සෙට් කිරීම
+          # 2. PulseAudio System එක Start කර sink/source setup කිරීම
           pulseaudio -D --exit-idle-time=-1
+          sleep 2
+          
           pacmd load-module module-virtual-sink sink_name=v1
           pacmd set-default-sink v1
           pacmd set-default-source v1.monitor
           
-          # 3. Virtual Display එක Start කිරීම
+          # 3. CRITICAL: Chromium audio output එක v1 sink එකටම force කිරීම
+          export PULSE_SINK=v1
+          
+          # 4. Virtual Display එක Start කිරීම
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x720x24 &
           sleep 3
 
-          # 4. Browser Script එක Run කිරීම
+          # 5. Browser Script එක Run කර Button එක click කරවීම
           node stream.js &
           
-          # 5. Button එක Click වී Radio එක Play වෙනකම් තත්පර 15ක් ඉන්නවා
+          # 6. Radio එක play වී audio load වීමට තත්පර 15ක් ඉඳීම
           sleep 15 
 
-          # 6. FFmpeg එකෙන් Capture කරලා YouTube යැවීම
+          # 7. Audio sinks connect වී ඇත්දැයි බැලීමට debug logs පෙන්වීම
+          echo "=== PulseAudio Sink Inputs ==="
+          pactl list short sink-inputs || true
+
+          # 8. FFmpeg හරහා screen එකයි v1.monitor audio එකයි capture කර YouTube යැවීම
           ffmpeg -thread_queue_size 1024 \
           -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
           -f pulse -i v1.monitor \
