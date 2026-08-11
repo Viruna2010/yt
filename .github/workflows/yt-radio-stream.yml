@@ -1,0 +1,89 @@
+name: Viru Radio YT Stream (Browser Capture)
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 */5 * * *' # පැය 5න් 5ට auto restart වෙනවා
+
+jobs:
+  stream:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Install System Dependencies (Video/Audio)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb pulseaudio ffmpeg chromium-browser
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Puppeteer
+        run: npm install puppeteer
+
+      - name: Create Auto-Clicker Script
+        run: |
+          cat << 'EOF' > stream.js
+          const puppeteer = require('puppeteer');
+          
+          (async () => {
+            const browser = await puppeteer.launch({
+              headless: false, // Screen එක record කරන්න ඕන නිසා false කරනවා
+              defaultViewport: { width: 1280, height: 720 },
+              args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--autoplay-policy=no-user-gesture-required',
+                '--window-size=1280,720',
+                '--start-maximized'
+              ]
+            });
+            const page = await browser.newPage();
+            
+            console.log("Loading website...");
+            await page.goto('https://viru-radio.pages.dev/', { waitUntil: 'networkidle2' });
+            
+            console.log("Waiting 5 seconds for page load...");
+            await new Promise(r => setTimeout(r, 5000));
+            
+            console.log("Clicking the 'Listen Live' button...");
+            await page.evaluate(() => {
+              // 'Listen Live' කියලා තියෙන button එක හොයලා click කරනවා
+              const elements = [...document.querySelectorAll('button, div, span')];
+              const btn = elements.find(el => el.innerText && el.innerText.includes('Listen Live'));
+              if (btn) {
+                btn.click();
+              }
+            });
+            
+            console.log("Radio is playing. Keeping browser open...");
+          })();
+          EOF
+
+      - name: Start Stream to YouTube
+        env:
+          YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
+        run: |
+          # Virtual Audio System එක on කිරීම
+          pulseaudio -D --exit-idle-time=-1
+          pacmd load-module module-virtual-sink sink_name=v1
+          
+          # Virtual Display එක on කිරීම
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x720x24 &
+          sleep 3
+
+          # Node script එක run කරලා website එක open කිරීම
+          node stream.js &
+          
+          # Radio එක load වෙන්න තත්පර 10ක් දීලා stream එක පටන් ගන්නවා
+          sleep 10 
+
+          # Screen එකයි Audio එකයි record කරලා YouTube යැවීම
+          ffmpeg -thread_queue_size 1024 -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
+          -f pulse -i default \
+          -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
+          -c:a aac -b:a 128k -ar 44100 \
+          -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
