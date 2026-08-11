@@ -1,16 +1,16 @@
-name: Viru Radio YT Stream (Browser Capture)
+name: Viru Radio 24/7 YT Stream (Red Button Clicker)
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */5 * * *' # Paya 5n 5ta auto restart wenawa
+    - cron: '0 */5 * * *' # පැය 5න් 5ට auto restart වෙනවා
 
 jobs:
   stream:
     runs-on: ubuntu-latest
     
     steps:
-      - name: Install System Dependencies (Video/Audio)
+      - name: Install System Dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb pulseaudio ffmpeg chromium-browser
@@ -23,7 +23,7 @@ jobs:
       - name: Install Puppeteer
         run: npm install puppeteer
 
-      - name: Create Auto-Clicker Script (Whole Page)
+      - name: Create Smart Red Button Clicker Script
         run: |
           cat << 'EOF' > stream.js
           const puppeteer = require('puppeteer');
@@ -42,41 +42,60 @@ jobs:
             });
             const page = await browser.newPage();
             
-            console.log("Loading website...");
+            console.log("Loading Viru Radio website...");
             await page.goto('https://viru-radio.pages.dev/', { waitUntil: 'networkidle2' });
             
-            // Radio eka load wenakam titha 5-10k innawa
-            console.log("Waiting 10 seconds for initial connection...");
-            await new Promise(r => setTimeout(r, 10000));
+            console.log("Waiting for 'Connecting to Server...' to finish...");
             
-            console.log("Clicking *everywhere* on the page...");
-            
-            // Whole page area (1280x720) clicks yawanna:
-            await page.evaluate(() => {
-              const width = 1280;
-              const height = 720;
-              const stepX = 50; // Every 50 pixels horizontally
-              const stepY = 50; // Every 50 pixels vertically
+            try {
+              // රතු පාට Listen Live button එක එනකම් උපරිම තත්පර 60ක් බලාගෙන ඉන්නවා
+              await page.waitForFunction(() => {
+                const elements = [...document.querySelectorAll('*')];
+                return elements.some(el => {
+                  const textMatch = el.innerText && el.innerText.includes('Listen Live');
+                  // රතු පාට background එකක් තියෙනවද කියලා check කරනවා
+                  const bg = window.getComputedStyle(el).backgroundColor;
+                  const isRed = bg.includes('rgb(255,') || bg.includes('rgb(239,') || bg.includes('red');
+                  return textMatch || isRed;
+                });
+              }, { timeout: 60000 });
               
-              for (let x = 0; x < width; x += stepX) {
-                for (let y = 0; y < height; y += stepY) {
-                  // Coordinate ekak generate karala math click yawanna
-                  const clickX = x + Math.random() * 20; // Random offset for variation
-                  const clickY = y + Math.random() * 20;
-                  
-                  // Meke simulate karanna custom function ekak liwwa
-                  window.dispatchEvent(new MouseEvent('click', {
-                    view: window,
-                    bubbles: true,
-                    cancelable: true,
-                    clientX: clickX,
-                    clientY: clickY
-                  }));
-                }
+              console.log("Red 'Listen Live' Button found! Locating exact position...");
+              
+              // හරියටම ඇතුලෙම තියෙන රතු පාට element එක හොයාගන්නවා (.reverse() පාවිච්චි කරලා)
+              const buttonHandle = await page.evaluateHandle(() => {
+                const elements = [...document.querySelectorAll('*')];
+                return elements.reverse().find(el => {
+                  const text = el.innerText || '';
+                  const bg = window.getComputedStyle(el).backgroundColor;
+                  const isRed = bg.includes('rgb(255,') || bg.includes('rgb(239,') || bg.includes('red');
+                  return (text.includes('Listen Live') && text.length < 20) || (isRed && text.includes('Listen'));
+                });
+              });
+              
+              const box = await buttonHandle.boundingBox();
+              
+              if (box) {
+                // Button එකේ හරි මැද point එක හොයාගන්නවා
+                const targetX = box.x + box.width / 2;
+                const targetY = box.y + box.height / 2;
+                
+                console.log(`Moving mouse to Red Button at X: ${targetX}, Y: ${targetY}`);
+                await page.mouse.move(targetX, targetY, { steps: 10 });
+                
+                // මනුස්සයෙක් click කරනවා වගේම Mouse එක ඔබලා, මිලි තත්පර 100ක් අල්ලන් ඉඳලා අතහරිනවා
+                await page.mouse.down();
+                await new Promise(r => setTimeout(r, 100)); 
+                await page.mouse.up();
+                console.log("Red Button Clicked successfully!");
+                
+              } else {
+                console.log("Bounding box not found. Clicking via Javascript as fallback.");
+                await buttonHandle.evaluate(b => b.click());
               }
-            });
-            
-            console.log("Radio playing. Keeping browser open...");
+            } catch (err) {
+              console.log("Error: Red Button did not appear.", err);
+            }
           })();
           EOF
 
@@ -84,22 +103,22 @@ jobs:
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
         run: |
-          # Virtual Audio System ekon kirima
+          # Virtual Audio System එක on කිරීම
           pulseaudio -D --exit-idle-time=-1
           pacmd load-module module-virtual-sink sink_name=v1
           
-          # Virtual Display ekon kirima
+          # Virtual Display එක on කිරීම
           export DISPLAY=:99
           Xvfb :99 -screen 0 1280x720x24 &
           sleep 3
 
-          # Node script eka run karala website eka open kirima
+          # Node script එක run කිරීම
           node stream.js &
           
-          # Whole page click wenakota stream eka patan ganna
-          sleep 5 
+          # Button එක click වෙලා Audio එක play වෙන්න තත්පර 15ක් දෙනවා (මෙතනින් තමයි stream එක පටන් ගන්න කලින් audio එක load වෙන්න වෙලාව හදලා තියෙන්නේ)
+          sleep 15 
 
-          # Screen ekai Audio ekai record karala YouTube yaweema
+          # Screen එකයි Audio එකයි record කරලා YouTube යැවීම
           ffmpeg -thread_queue_size 1024 -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
           -f pulse -i default \
           -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
