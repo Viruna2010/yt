@@ -1,590 +1,118 @@
-name: Viru Radio 24/7 YT Stream
+name: Viru Radio 24/7 YT Stream (Final Audio Fix)
 
 on:
   workflow_dispatch:
-
   schedule:
-    # Every 5 hours
-    - cron: '0 */5 * * *'
+    - cron: '0 */5 * * *' # පැය 5න් 5ට auto restart වෙනවා
 
 jobs:
   stream:
     runs-on: ubuntu-latest
-
+    
     steps:
-
-      # ============================================================
-      # 1. INSTALL SYSTEM DEPENDENCIES
-      # ============================================================
-      - name: Install System Dependencies
+      - name: Install System Dependencies (With Audio Bridge)
         run: |
           sudo apt-get update
+          # මෙතන alsa-utils සහ libasound2-plugins දැම්මා අනිවාර්යයෙන් audio link වෙන්න
+          sudo apt-get install -y xvfb pulseaudio ffmpeg chromium-browser alsa-utils libasound2-plugins
 
-          sudo apt-get install -y \
-            xvfb \
-            pulseaudio \
-            pulseaudio-utils \
-            ffmpeg \
-            alsa-utils \
-            libasound2-plugins \
-            libnss3 \
-            libatk-bridge2.0-0 \
-            libgtk-3-0 \
-            libgbm1 \
-            libxss1 \
-            libasound2t64
-
-      # ============================================================
-      # 2. SETUP NODE.JS
-      # ============================================================
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v3
         with:
-          node-version: '22'
+          node-version: '18'
 
-      # ============================================================
-      # 3. INSTALL PUPPETEER
-      # ============================================================
       - name: Install Puppeteer
+        run: npm install puppeteer
+
+      - name: Create Smart Red Button Clicker Script
         run: |
-          npm init -y
-          npm install puppeteer
-
-          # Make sure Puppeteer's Chrome is installed
-          npx puppeteer browsers install chrome
-
-      # ============================================================
-      # 4. CREATE BROWSER SCRIPT
-      # ============================================================
-      - name: Create Radio Browser Script
-        run: |
-          cat > stream.js <<'EOF'
-
+          cat << 'EOF' > stream.js
           const puppeteer = require('puppeteer');
-
+          
           (async () => {
-
-            console.log("======================================");
-            console.log(" VIRU RADIO BROWSER STARTING");
-            console.log("======================================");
-
-            console.log("PULSE_SINK =", process.env.PULSE_SINK);
-            console.log("DISPLAY =", process.env.DISPLAY);
-
             const browser = await puppeteer.launch({
-
               headless: false,
-
-              defaultViewport: {
-                width: 1280,
-                height: 720
-              },
-
+              defaultViewport: { width: 1280, height: 720 },
               args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
-
-                // Allow audio autoplay
                 '--autoplay-policy=no-user-gesture-required',
-
-                // Window
                 '--window-size=1280,720',
-                '--start-maximized',
-
-                // Keep browser running properly
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding',
-
-                // Audio
-                '--enable-features=WebAudio',
-                '--disable-features=AudioServiceOutOfProcess',
-
-                // Stability
-                '--disable-dev-shm-usage'
+                '--start-maximized'
               ]
             });
-
             const page = await browser.newPage();
-
-            page.on('console', msg => {
-              console.log('[PAGE]', msg.text());
-            });
-
-            page.on('pageerror', error => {
-              console.log('[PAGE ERROR]', error.message);
-            });
-
-            page.on('requestfailed', request => {
-              console.log(
-                '[REQUEST FAILED]',
-                request.url(),
-                request.failure()?.errorText
-              );
-            });
-
-            console.log("Loading Viru Radio...");
-
-            await page.goto(
-              'https://viru-radio.pages.dev/',
-              {
-                waitUntil: 'domcontentloaded',
-                timeout: 120000
-              }
-            );
-
-            console.log("Website loaded.");
-
-            // Give website JS time to initialize
-            await new Promise(resolve => setTimeout(resolve, 5000));
-
-            console.log("Looking for Listen Live button...");
-
+            
+            console.log("Loading Viru Radio website...");
+            await page.goto('https://viru-radio.pages.dev/', { waitUntil: 'networkidle2' });
+            
             try {
-
-              // ----------------------------------------------------
-              // Wait for Listen Live / red button
-              // ----------------------------------------------------
-
               await page.waitForFunction(() => {
-
-                const elements = [
-                  ...document.querySelectorAll(
-                    'button, a, [role="button"], div'
-                  )
-                ];
-
+                const elements = [...document.querySelectorAll('*')];
                 return elements.some(el => {
-
-                  const text =
-                    (el.innerText || '')
-                      .trim()
-                      .toLowerCase();
-
-                  const style =
-                    window.getComputedStyle(el);
-
-                  const bg =
-                    style.backgroundColor.toLowerCase();
-
-                  return (
-                    text.includes('listen live') ||
-                    text === 'listen' ||
-                    bg.includes('rgb(255, 0, 0)') ||
-                    bg.includes('rgb(239, 68, 68)') ||
-                    bg.includes('red')
-                  );
-
+                  const textMatch = el.innerText && el.innerText.includes('Listen Live');
+                  const bg = window.getComputedStyle(el).backgroundColor;
+                  const isRed = bg.includes('rgb(255,') || bg.includes('rgb(239,') || bg.includes('red');
+                  return textMatch || isRed;
                 });
-
-              }, {
-                timeout: 60000
+              }, { timeout: 60000 });
+              
+              const buttonHandle = await page.evaluateHandle(() => {
+                const elements = [...document.querySelectorAll('*')];
+                return elements.reverse().find(el => {
+                  const text = el.innerText || '';
+                  const bg = window.getComputedStyle(el).backgroundColor;
+                  const isRed = bg.includes('rgb(255,') || bg.includes('rgb(239,') || bg.includes('red');
+                  return (text.includes('Listen Live') && text.length < 20) || (isRed && text.includes('Listen'));
+                });
               });
-
-              console.log("Listen Live button detected.");
-
-              // ----------------------------------------------------
-              // Find the actual clickable element
-              // ----------------------------------------------------
-
-              const button = await page.evaluateHandle(() => {
-
-                const elements = [
-                  ...document.querySelectorAll(
-                    'button, a, [role="button"], div'
-                  )
-                ];
-
-                // First priority: exact text
-                let found = elements.find(el => {
-
-                  const text =
-                    (el.innerText || '')
-                      .trim()
-                      .toLowerCase();
-
-                  return text === 'listen live';
-
-                });
-
-                if (found) {
-                  return found;
-                }
-
-                // Second priority: contains Listen Live
-                found = elements.find(el => {
-
-                  const text =
-                    (el.innerText || '')
-                      .trim()
-                      .toLowerCase();
-
-                  return (
-                    text.includes('listen live') &&
-                    text.length < 50
-                  );
-
-                });
-
-                if (found) {
-                  return found;
-                }
-
-                // Third priority: red button
-                found = elements.find(el => {
-
-                  const text =
-                    (el.innerText || '')
-                      .trim()
-                      .toLowerCase();
-
-                  const bg =
-                    window.getComputedStyle(el)
-                      .backgroundColor
-                      .toLowerCase();
-
-                  return (
-                    text.includes('listen') &&
-                    (
-                      bg.includes('rgb(255, 0, 0)') ||
-                      bg.includes('rgb(239, 68, 68)') ||
-                      bg.includes('red')
-                    )
-                  );
-
-                });
-
-                return found;
-
-              });
-
-              const element =
-                button.asElement();
-
-              if (!element) {
-
-                console.log(
-                  "Could not convert button handle."
-                );
-
+              
+              const box = await buttonHandle.boundingBox();
+              if (box) {
+                const targetX = box.x + box.width / 2;
+                const targetY = box.y + box.height / 2;
+                await page.mouse.move(targetX, targetY, { steps: 10 });
+                await page.mouse.down();
+                await new Promise(r => setTimeout(r, 150)); 
+                await page.mouse.up();
+                console.log("Red Button Clicked successfully!");
               } else {
-
-                // --------------------------------------------------
-                // Scroll button into view
-                // --------------------------------------------------
-
-                await element.evaluate(el => {
-
-                  el.scrollIntoView({
-                    behavior: 'instant',
-                    block: 'center',
-                    inline: 'center'
-                  });
-
-                });
-
-                await new Promise(
-                  resolve => setTimeout(resolve, 1000)
-                );
-
-                // --------------------------------------------------
-                // Get position
-                // --------------------------------------------------
-
-                const box =
-                  await element.boundingBox();
-
-                if (box) {
-
-                  const x =
-                    box.x + box.width / 2;
-
-                  const y =
-                    box.y + box.height / 2;
-
-                  console.log(
-                    `Clicking Listen Live at ${x}, ${y}`
-                  );
-
-                  // Real mouse click
-                  await page.mouse.move(
-                    x,
-                    y,
-                    {
-                      steps: 15
-                    }
-                  );
-
-                  await page.mouse.down();
-
-                  await new Promise(
-                    resolve => setTimeout(resolve, 150)
-                  );
-
-                  await page.mouse.up();
-
-                  console.log(
-                    "Listen Live clicked successfully."
-                  );
-
-                } else {
-
-                  console.log(
-                    "No bounding box. Using DOM click."
-                  );
-
-                  await element.click();
-
-                }
-
+                await buttonHandle.evaluate(b => b.click());
               }
-
-            } catch (error) {
-
-              console.log(
-                "Button detection/click error:",
-                error.message
-              );
-
+            } catch (err) {
+              console.log("Error during click process:", err);
             }
-
-            // ------------------------------------------------------
-            // Give radio stream time to start
-            // ------------------------------------------------------
-
-            console.log(
-              "Waiting for radio audio to start..."
-            );
-
-            await new Promise(
-              resolve => setTimeout(resolve, 15000)
-            );
-
-            console.log(
-              "Browser will remain alive for streaming."
-            );
-
-            // Keep browser alive forever
-            await new Promise(() => {});
-
-          })().catch(error => {
-
-            console.error(
-              "FATAL BROWSER ERROR:",
-              error
-            );
-
-            process.exit(1);
-
-          });
-
+          })();
           EOF
 
-      # ============================================================
-      # 5. START STREAM
-      # ============================================================
-      - name: Start Viru Radio YouTube Stream
+      - name: Start Stream to YouTube
         env:
           YOUTUBE_STREAM_KEY: ${{ secrets.YOUTUBE_STREAM_KEY }}
-
         run: |
-
-          set -e
-
-          echo "======================================"
-          echo " VIRU RADIO YOUTUBE STREAM"
-          echo "======================================"
-
-          # ========================================================
-          # ALSA -> PULSEAUDIO
-          # ========================================================
-
-          cat > ~/.asoundrc <<'EOF'
-          pcm.!default {
-              type pulse
-          }
-
-          ctl.!default {
-              type pulse
-          }
-          EOF
-
-          echo "ALSA configuration created."
-
-          # ========================================================
-          # START PULSEAUDIO
-          # ========================================================
-
-          pulseaudio --start \
-            --exit-idle-time=-1
-
+          # 1. ALSA to PulseAudio Bridge එක හදනවා (මේකෙන් තමයි Browser audio එක අල්ලන්නේ)
+          echo -e "pcm.!default {\n    type pulse\n}\nctl.!default {\n    type pulse\n}" > ~/.asoundrc
+          
+          # 2. PulseAudio System එක සෙට් කිරීම
+          pulseaudio -D --exit-idle-time=-1
+          pacmd load-module module-virtual-sink sink_name=v1
+          pacmd set-default-sink v1
+          pacmd set-default-source v1.monitor
+          
+          # 3. Virtual Display එක Start කිරීම
+          export DISPLAY=:99
+          Xvfb :99 -screen 0 1280x720x24 &
           sleep 3
 
-          echo "PulseAudio started."
+          # 4. Browser Script එක Run කිරීම
+          node stream.js &
+          
+          # 5. Button එක Click වී Radio එක Play වෙනකම් තත්පර 15ක් ඉන්නවා
+          sleep 15 
 
-          # ========================================================
-          # CREATE VIRTUAL AUDIO SINK
-          # ========================================================
-
-          pactl load-module module-null-sink \
-            sink_name=v1 \
-            sink_properties=device.description=ViruRadioSink
-
-          sleep 2
-
-          # ========================================================
-          # SET DEFAULT SINK
-          # ========================================================
-
-          pactl set-default-sink v1
-
-          pactl set-default-source v1.monitor
-
-          # IMPORTANT:
-          # Chromium will send its audio to v1
-          export PULSE_SINK=v1
-
-          echo "PULSE_SINK=$PULSE_SINK"
-
-          # ========================================================
-          # SHOW AUDIO DEVICES
-          # ========================================================
-
-          echo ""
-          echo "========== PULSEAUDIO SINKS =========="
-
-          pactl list short sinks
-
-          echo ""
-          echo "========== PULSEAUDIO SOURCES =========="
-
-          pactl list short sources
-
-          # ========================================================
-          # START X SERVER
-          # ========================================================
-
-          export DISPLAY=:99
-
-          Xvfb :99 \
-            -screen 0 1280x720x24 \
-            -ac \
-            +extension GLX \
-            +render \
-            -noreset &
-
-          XVFB_PID=$!
-
-          sleep 4
-
-          echo "Xvfb started. PID=$XVFB_PID"
-
-          # ========================================================
-          # START RADIO BROWSER
-          # ========================================================
-
-          echo ""
-          echo "Starting Viru Radio browser..."
-
-          export PULSE_SINK=v1
-
-          node stream.js > browser.log 2>&1 &
-
-          BROWSER_PID=$!
-
-          echo "Browser PID=$BROWSER_PID"
-
-          # ========================================================
-          # WAIT FOR RADIO
-          # ========================================================
-
-          echo ""
-          echo "Waiting 25 seconds for radio audio..."
-
-          sleep 25
-
-          # ========================================================
-          # SHOW BROWSER LOG
-          # ========================================================
-
-          echo ""
-          echo "========== BROWSER LOG =========="
-
-          cat browser.log || true
-
-          # ========================================================
-          # CHECK CHROME AUDIO CONNECTION
-          # ========================================================
-
-          echo ""
-          echo "========== PULSEAUDIO SINK INPUTS =========="
-
-          pactl list short sink-inputs || true
-
-          # ========================================================
-          # SHOW DEFAULT AUDIO DEVICE
-          # ========================================================
-
-          echo ""
-          echo "========== DEFAULT SINK =========="
-
-          pactl get-default-sink || true
-
-          echo ""
-          echo "========== DEFAULT SOURCE =========="
-
-          pactl get-default-source || true
-
-          # ========================================================
-          # CHECK STREAM KEY
-          # ========================================================
-
-          if [ -z "$YOUTUBE_STREAM_KEY" ]; then
-            echo "ERROR: YOUTUBE_STREAM_KEY is empty."
-            exit 1
-          fi
-
-          echo "YouTube stream key detected."
-
-          # ========================================================
-          # START FFMPEG
-          # ========================================================
-
-          echo ""
-          echo "======================================"
-          echo " STARTING FFMPEG"
-          echo " VIDEO: X11 :99"
-          echo " AUDIO: PulseAudio v1.monitor"
-          echo " ======================================"
-          echo ""
-
-          ffmpeg \
-            -hide_banner \
-            -loglevel info \
-            -thread_queue_size 2048 \
-            -f x11grab \
-            -video_size 1280x720 \
-            -framerate 30 \
-            -i :99 \
-            -thread_queue_size 2048 \
-            -f pulse \
-            -i v1.monitor \
-            -map 0:v:0 \
-            -map 1:a:0 \
-            -c:v libx264 \
-            -preset veryfast \
-            -tune zerolatency \
-            -b:v 2500k \
-            -maxrate 2500k \
-            -bufsize 5000k \
-            -pix_fmt yuv420p \
-            -r 30 \
-            -g 60 \
-            -keyint_min 60 \
-            -sc_threshold 0 \
-            -c:a aac \
-            -b:a 128k \
-            -ar 44100 \
-            -ac 2 \
-            -f flv \
-            "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
+          # 6. FFmpeg එකෙන් Capture කරලා YouTube යැවීම
+          ffmpeg -thread_queue_size 1024 \
+          -f x11grab -video_size 1280x720 -framerate 30 -i :99 \
+          -f pulse -i v1.monitor \
+          -c:v libx264 -preset veryfast -b:v 2500k -maxrate 2500k -bufsize 5000k -pix_fmt yuv420p -g 60 \
+          -c:a aac -b:a 128k -ar 44100 \
+          -f flv "rtmp://a.rtmp.youtube.com/live2/$YOUTUBE_STREAM_KEY"
